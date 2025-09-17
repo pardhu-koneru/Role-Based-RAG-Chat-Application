@@ -1,0 +1,16 @@
+# Environment files
+.env
+
+# Database
+rag.db
+
+# Folders to ignore
+chroma_data/
+rag/
+__pycache__/
+
+# Optional: Ignore system/IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
