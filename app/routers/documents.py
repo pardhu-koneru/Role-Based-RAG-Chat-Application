@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException,Depends
-from .. import docs, oauth2, schemas,models,database
+from .. import auth_jwt, docs, schemas,models,database
 from sqlalchemy.orm import Session
 from ..database import get_db
 
 router = APIRouter()
 @router.post("/load_documents")
-async def load_documents(db: Session = Depends(get_db), current_user: schemas.User = Depends(oauth2.get_admin_access)):
+async def load_documents(db: Session = Depends(get_db), current_user: schemas.UserCreate = Depends(auth_jwt.get_admin_access)):
     try:
         # Check if documents already exist in the database
         existing_documents_count = db.query(models.Document).count()
@@ -18,7 +18,7 @@ async def load_documents(db: Session = Depends(get_db), current_user: schemas.Us
         raise HTTPException(status_code=500, detail=f"Database error occurred: {str(e)}")
 
 @router.post("/load_documents")
-async def load_documents(db: Session = Depends(get_db), current_user: schemas.User= Depends(oauth2.get_admin_access)):
+async def load_documents(db: Session = Depends(get_db), current_user: schemas.UserCreate= Depends(auth_jwt.get_admin_access)):
     try:
         docs.read_and_store_documents(db)
         return {"message": "Documents loaded successfully"}
@@ -28,7 +28,7 @@ async def load_documents(db: Session = Depends(get_db), current_user: schemas.Us
 
 @router.get("/get_content")
 def get_content(
-    current_user: schemas.TokenData = Depends(oauth2.get_current_user),
+    current_user: schemas.TokenData = Depends(auth_jwt.get_current_user),
     db: Session = Depends(database.get_db),
 ):
     """
