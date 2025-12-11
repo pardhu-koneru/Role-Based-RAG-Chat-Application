@@ -7,11 +7,11 @@ class User(Base):
     __tablename__ = 'users'
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    email = Column(String)
-    password = Column(String)
-    role = Column(String, default="user")  # "admin" or "user"
-    department = Column(String, nullable=True)  # e.g., "HR", "Finance"
+    name = Column(String, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password = Column(String, nullable=False)  # store bcrypt hashed
+    role = Column(String, default="user")    # e.g., "HR", "Finance"
+    department = Column(String, nullable=True)
     documents = relationship("Document", back_populates="owner")
 
 

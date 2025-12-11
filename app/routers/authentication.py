@@ -1,32 +1,40 @@
-from fastapi import APIRouter, Depends, status, HTTPException
-from fastapi.security import OAuth2PasswordRequestForm
-from .. import schemas, database, models, token
-from ..hashing import Hash
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-router = APIRouter(tags=['Authentication'])
+from app.schemas import LoginRequest,TokenResponse,UserCreate,UserOut
+from app.database import get_db,Base,engine
+from app.models import User
+from app.token import create_access_token
+from app.hashing import Hash
+from app.repository import user
 
-@router.post('/login')
-def login(request:OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
-    user = db.query(models.User).filter(models.User.email == request.username).first()
+router = APIRouter(prefix="/api/authentication", tags=["Authentication"])
+Base.metadata.create_all(bind=engine)
+
+@router.post("/register", response_model=UserOut)
+def register(request: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == request.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    request.password = Hash.bcrypt(request.password)
+    
+    return user.create(request,db)
+
+@router.post("/login",response_model = TokenResponse)
+def login(request: LoginRequest, db: Session = Depends(get_db)):
+
+    user = db.query(User).filter(User.email == request.email).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail=f"Invalid Credentials")
+        raise HTTPException(401, "Invalid credentials")
 
+    print("User typed password:", request.password, len(request.password))
+    
     if not Hash.verify(user.password, request.password):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Incorrect password")
-    
-    role = "admin" if user.email == "admin@gmail.com" else "user"
-    
-    # Create token with both email and role information
-    access_token = token.create_access_token(
-        data={"sub": user.email, "role": role,"department": user.department}
-    )
-    
-    return {
-        "access_token": access_token, 
-        "token_type": "bearer",
-        "role": role,
-        "email": user.email,
-        "department":user.department
-    }
+        raise HTTPException(401, "Invalid credentials")
+
+    token = create_access_token({
+        "sub": user.email,
+        "role": user.role,
+        "department": user.department
+    })
+
+    return {"access_token": token, "token_type": "bearer"}

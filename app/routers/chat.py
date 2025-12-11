@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, status, HTTPException
 
-from .. import schemas, database,oauth2
+from .. import auth_jwt, schemas, database
 
 from ..load_transform_store import ChatRequest,ChatResponse,document_service,generate_enhanced_rag_response
 # from app.load_transform_store import get_or_create_vectorstore,similarity_search,get_vectorstore_stats
@@ -16,7 +16,7 @@ router = APIRouter()
 @router.post("/chat", response_model=ChatResponse)
 def chat_with_rag(
     request: ChatRequest,
-    current_user: schemas.TokenData = Depends(oauth2.get_current_user),
+    current_user: schemas.TokenData = Depends(auth_jwt.get_current_user),
     db: Session = Depends(database.get_db)
 ):
     """
@@ -73,7 +73,7 @@ def chat_with_rag(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/chat/collections")
-def list_collections(current_user: schemas.TokenData = Depends(oauth2.get_current_user)):
+def list_collections(current_user: schemas.TokenData = Depends(auth_jwt.get_current_user)):
     """
     List all collections in the vector store
     """
@@ -107,7 +107,7 @@ def list_collections(current_user: schemas.TokenData = Depends(oauth2.get_curren
 @router.delete("/chat/reset/{department}")
 def reset_department_vectorstore(
     department: str,
-    current_user: schemas.TokenData = Depends(oauth2.get_current_user)
+    current_user: schemas.TokenData = Depends(auth_jwt.get_current_user)
 ):
     """
     Reset vectorstore for a department (Admin only)

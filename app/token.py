@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from . import schemas
+from app.schemas import TokenData
 
 SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
 ALGORITHM = "HS256"
@@ -10,20 +10,20 @@ def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def verify_token(token:str,credentials_exception):
+def verify_token(token: str):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        role: str = payload.get("role")
-        department: str = payload.get("department")
-        
-        if email is None:
-            raise credentials_exception
-        
-        token_data = schemas.TokenData(email=email,role=role,department=department)
-        return token_data
+
+        email :str = payload.get("sub")
+        role :str= payload.get("role")
+        department :str= payload.get("department")
+
+        if not email:
+            return None
+
+        return TokenData(email=email, role=role, department=department)
+
     except JWTError:
-        raise credentials_exception
+        return None

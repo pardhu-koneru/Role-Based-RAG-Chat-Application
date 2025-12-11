@@ -4,9 +4,9 @@ from .. import models, schemas
 from ..hashing import Hash
 
 
-def create(request: schemas.User, db: Session):
+def create(request: schemas.UserCreate, db: Session):
     new_user = models.User(
-        name=request.name, email=request.email, password=Hash.bcrypt(request.password),role=request.role,department=request.department)
+        name=request.name, email=request.email, password=request.password,role=request.role,department=request.department)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
