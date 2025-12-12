@@ -1,12 +1,14 @@
+from auth import auth_jwt
 from fastapi import APIRouter,HTTPException
-from .. import auth_jwt, database, schemas, models
+import database, schemas, models
 from sqlalchemy.orm import Session
 from fastapi import APIRouter,Depends,status
-from ..repository import user
+from repository import user
+from auth.hashing import Hash
 
 router = APIRouter(
-    prefix="/user",
-    tags=['Users']
+    prefix="/api/admin",
+    tags=['admin']
 )
 
 get_db = database.get_db
@@ -20,6 +22,7 @@ def create_user(request: schemas.UserCreate, db: Session = Depends(get_db), curr
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )   
+    request.password = Hash.bcrypt(request.password)
     return user.create(request, db)
 
 @router.get('/{id}',response_model=schemas.ShowUser)

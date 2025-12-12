@@ -1,7 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.token import verify_token
-from app.schemas import TokenData
+from .token import verify_token
+from schemas import TokenData
 
 # Create a security scheme
 security = HTTPBearer()
