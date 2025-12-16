@@ -7,10 +7,15 @@ This file:
 3. Stores in ChromaDB vector database
 """
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+# from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain.schema import Document as LangchainDocument
+from langchain_ollama import OllamaEmbeddings
+# from langchain.schema import Document as LangchainDocument
+from langchain_core.documents import Document as LangchainDocument
+
 from pathlib import Path
 from typing import List
 
@@ -26,9 +31,9 @@ class DocumentService:
         print("🔧 Initializing Document Service...")
         
         # 1. Setup Gemini embeddings
-        self.embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=settings.GOOGLE_API_KEY
+        self.embeddings =OllamaEmbeddings(
+            model="nomic-embed-text",
+            base_url="http://localhost:11434"
         )
         print("✅ Gemini embeddings initialized")
         
@@ -59,6 +64,7 @@ class DocumentService:
         Returns:
             int: Number of chunks created
         """
+        
         print(f"\n{'='*60}")
         print(f"🔄 PROCESSING: {document.original_filename}")
         print(f"📁 Department: {document.department}")

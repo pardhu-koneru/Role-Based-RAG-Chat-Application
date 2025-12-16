@@ -10,13 +10,12 @@ psycopg2-binary
 python-dotenv
 pydantic-settings
 chromadb
-# sentence-transformers
-# transformers
-# torch
-numpy
 langchain
 langchain-community
 langchain-chroma
 pandas
 google-generativeai
 langchain-google-genai
+langchain-core
+langchain-text-splitters
+langchain-ollama

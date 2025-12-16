@@ -16,12 +16,13 @@ router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
 # Initialize document service
 doc_service = DocumentService()
-
+ 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
     department: str = Form(...),
+    description: str = Form(None),
     current_user: TokenData = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -93,6 +94,7 @@ async def upload_document(
     user = db.query(User).filter(User.email == current_user.email).first()
     
     # Step 9: Save document info to database
+
     try:
         new_document = Document(
             filename=new_filename,
@@ -103,7 +105,8 @@ async def upload_document(
             uploaded_by=user.id,
             file_size=file_size,
             chunk_count=0,
-            vectorized="no"
+            vectorized="no",
+            description=description
         )
         
         db.add(new_document)
@@ -117,19 +120,20 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     
     # Step 10: Process and vectorize document
-    try:
-        print("🔄 Starting vectorization...")
-        chunk_count = doc_service.process_and_vectorize(new_document)
-        
-        # Update database with chunk count
-        new_document.chunk_count = chunk_count
-        new_document.vectorized = "yes"
-        db.commit()
-        
-        print(f"✅ Vectorized into {chunk_count} chunks\n")
-        
-    except Exception as e:
-        print(f"❌ Vectorization failed: {str(e)}")
+    if(new_document.vectorized == "no" and new_document.file_type not in ['xlsx', 'xls', 'csv']):
+        try:
+            print("🔄 Starting vectorization...")
+            chunk_count = doc_service.process_and_vectorize(new_document)
+            
+            # Update database with chunk count
+            new_document.chunk_count = chunk_count
+            new_document.vectorized = "yes"
+            db.commit()
+            
+            print(f"✅ Vectorized into {chunk_count} chunks\n")
+            
+        except Exception as e:
+            print(f"❌ Vectorization failed: {str(e)}")
         # Document saved but not vectorized
     
     # Return response
@@ -144,6 +148,7 @@ async def upload_document(
         chunk_count=new_document.chunk_count,
         vectorized=new_document.vectorized,
         uploaded_at=new_document.uploaded_at,
+        description=new_document.description,
         message=f"✅ Document uploaded and split into {new_document.chunk_count} chunks"
     )
 

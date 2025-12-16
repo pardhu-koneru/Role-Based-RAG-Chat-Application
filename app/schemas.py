@@ -53,7 +53,7 @@ class DocumentUploadResponse(BaseModel):
     vectorized: str
     uploaded_at: datetime
     message: str  # Success message
-    
+    description: Optional[str] = None
     class Config:
         from_attributes = True
 

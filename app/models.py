@@ -32,7 +32,7 @@ class Document(Base):
     chunk_count = Column(Integer, default=0)  # Number of chunks created
     vectorized = Column(String(10), default="no")  # "yes" or "no"
     uploaded_at = Column(DateTime, default=datetime.utcnow)
-    
+    description = Column(String(500), nullable=True)  # Optional schema information
     # Relationship to User
     uploader = relationship("User", backref="documents")
     
