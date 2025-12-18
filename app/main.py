@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 import uvicorn
 import models
-from routers import admin, authentication,documents
+from routers import admin, authentication,documents,chat
 from database import engine
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,6 +27,7 @@ models.Base.metadata.create_all(engine)
 app.include_router(authentication.router)
 app.include_router(admin.router)
 app.include_router(documents.router)
+app.include_router(chat.router)
 
 
 

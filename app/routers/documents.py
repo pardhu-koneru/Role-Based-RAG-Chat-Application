@@ -10,7 +10,7 @@ from auth.auth_jwt import get_current_user
 from schemas import TokenData, DocumentUploadResponse, DocumentOut, DocumentList
 from models import Document, User
 from services.document_service import DocumentService
-
+from services.description_vectorizer import DescriptionVectorizer
 # Create router
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
@@ -134,8 +134,21 @@ async def upload_document(
             
         except Exception as e:
             print(f"❌ Vectorization failed: {str(e)}")
-        # Document saved but not vectorized
-    
+    elif(new_document.file_type in ['xlsx', 'xls', 'csv']):
+        try:
+            print("🔄 Starting description vectorization for CSV/XLSX...")
+            desc_vectorizer = DescriptionVectorizer()
+            desc_vectorizer.vectorize_description(new_document)
+            
+            # Update database to indicate description vectorized
+            new_document.vectorized = "yes"
+            db.commit()
+            
+            print(f"✅ Description vectorization complete\n")
+            
+        except Exception as e:
+            print(f"❌ Description vectorization failed: {str(e)}")
+
     # Return response
     return DocumentUploadResponse(
         id=new_document.id,

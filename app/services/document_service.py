@@ -210,3 +210,6 @@ class DocumentService:
             print(f"✅ Deleted {len(results['ids'])} chunks")
         else:
             print(f"⚠️  No chunks found to delete")
+
+
+    

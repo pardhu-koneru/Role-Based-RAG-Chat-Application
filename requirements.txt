@@ -19,3 +19,8 @@ langchain-google-genai
 langchain-core
 langchain-text-splitters
 langchain-ollama
+langgraph
+langchain-groq
+pandas
+openpyxl
+python-markdown

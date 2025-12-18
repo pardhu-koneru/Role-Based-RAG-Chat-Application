@@ -1,9 +1,6 @@
-
 """
-Configuration Settings
-Save this file as: app/config.py
-
-This file loads settings from .env file
+Configuration with Groq API
+Update your app/config.py
 """
 
 from pydantic_settings import BaseSettings
@@ -21,9 +18,13 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # Google Gemini API
-    # GROQ_API_KEY: str
-    GOOGLE_API_KEY:str
+    # Groq API (FREE - get from https://console.groq.com/)
+    GROQ_API_KEY: str
+    
+    # Ollama (for local embeddings)
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "nomic-embed-text"  # Good embedding model
+    
     class Config:
         env_file = ".env"
         case_sensitive = False

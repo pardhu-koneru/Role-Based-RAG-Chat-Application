@@ -1,5 +1,5 @@
-from typing import List, Optional
-from pydantic import BaseModel
+from typing import List, Optional,TypedDict, Literal
+from pydantic import BaseModel,Field
 from datetime import datetime
 
 class UserCreate(BaseModel):
@@ -65,6 +65,7 @@ class DocumentOut(BaseModel):
     original_filename: str
     file_type: str
     department: str
+    description: str  # NEW
     uploaded_by: int
     file_size: int
     chunk_count: int
@@ -81,6 +82,7 @@ class DocumentList(BaseModel):
     total: int
     accessible_departments: List[str]
 
+
 class ChatRequest(BaseModel):
     """User's chat question"""
     query: str
@@ -96,6 +98,16 @@ class ChatResponse(BaseModel):
     """Bot's chat response"""
     query: str
     response: str
-    query_type: str  # "rag" or "sql"
+    query_type: str  # "sql" or "rag"
     sources: List[str]  # List of document names used
     department: str  # Which department data was used
+    sql_query: Optional[str] = None  # If SQL query was executed, show it
+    data_preview: Optional[List[dict]] = None  # First few rows of SQL result
+
+class QueryType(BaseModel):
+    """Structured output from LLM for query classification"""
+    type: Literal["sql", "rag"] = Field(
+        description="Type of query: 'sql' for data analysis questions, 'general' for other questions"
+    )  # Must be either "sql" or "rag"
+    confidence: float = Field(ge=0.0, le=1.0)  # 0.0 to 1.0
+    reasoning: str 
