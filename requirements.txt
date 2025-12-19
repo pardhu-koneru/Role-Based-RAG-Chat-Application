@@ -24,3 +24,4 @@ langchain-groq
 pandas
 openpyxl
 python-markdown
+langgraph-checkpoint-sqlite

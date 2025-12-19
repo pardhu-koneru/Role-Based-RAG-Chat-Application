@@ -11,7 +11,7 @@ This file:
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 # from langchain.schema import Document as LangchainDocument
 from langchain_core.documents import Document as LangchainDocument
@@ -35,7 +35,7 @@ class DocumentService:
             model="nomic-embed-text",
             base_url="http://localhost:11434"
         )
-        print("✅ Gemini embeddings initialized")
+        print("✅ Ollama embeddings initialized")
         
         # 2. Setup text splitter (breaks text into chunks)
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -172,12 +172,18 @@ class DocumentService:
         print(f"📝 Query: {query}")
         print(f"🎯 Top {top_k} results\n")
         
-        # Perform similarity search
-        results = vectorstore.similarity_search(query, k=top_k)
+        # Perform similarity search using the retriever
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",  # "similarity" or "mmr" (Maximum Marginal Relevance)
+            search_kwargs={"k": top_k}  # Number of documents to return
+        )
+        
+        # Invoke the retriever to get actual documents
+        docs = retriever.invoke(query)
         
         # Extract text and metadata
         chunks = []
-        for doc in results:
+        for doc in docs:
             chunks.append({
                 "text": doc.page_content,
                 "source": doc.metadata.get("source", "Unknown"),

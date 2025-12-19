@@ -11,9 +11,13 @@ from langchain_groq import ChatGroq
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 import pandas as pd
-
+from pathlib import Path
+import os
+import json
+from datetime import datetime
 from config import settings
 from services.description_vectorizer import DescriptionVectorizer
+from services.document_service import DocumentService
 from schemas import QueryType
 
 
@@ -22,6 +26,7 @@ class ChatState(TypedDict):
     """State that flows through the graph"""
     query: str
     department: str
+    user_id: str  # Individual user identifier
     query_type: str  # "sql" or "rag"
     relevant_files: List[dict]
     generated_sql: str
@@ -29,6 +34,8 @@ class ChatState(TypedDict):
     final_response: str
     sources: List[str]
     error: str
+    messages: List[dict]  # Conversation history
+    thread_id: str  # Thread/conversation ID for this user
 
 
 # ============= LANGGRAPH WORKFLOW =============
@@ -45,9 +52,82 @@ class ChatWorkflow:
         
         # Initialize services
         self.desc_vectorizer = DescriptionVectorizer()
+        self.doc_service = DocumentService()
+        
+        # Initialize persistent memory (JSON-based)
+        app_dir = Path(__file__).parent.parent  # Go up to app/ directory
+        self.memory_dir = app_dir / "memory"
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self.memory_file = self.memory_dir / "conversations.json"
+        
+        # Load existing conversations
+        self.conversations = self._load_conversations()
+        print("✅ Persistent memory initialized at", self.memory_file)
         
         # Build graph
         self.graph = self._build_graph()
+    
+    
+    def _load_conversations(self) -> dict:
+        """Load conversations from JSON file"""
+        if self.memory_file.exists():
+            try:
+                with open(self.memory_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    
+    def _save_conversations(self):
+        """Save conversations to JSON file"""
+        with open(self.memory_file, 'w') as f:
+            json.dump(self.conversations, f, indent=2, default=str)
+    
+    
+    # ============= MEMORY MANAGEMENT =============
+    def get_conversation_history(self, thread_id: str) -> List[dict]:
+        """
+        Retrieve conversation history from memory
+        
+        Args:
+            thread_id: Conversation thread ID
+            
+        Returns:
+            List of previous messages in the conversation
+        """
+        return self.conversations.get(thread_id, {}).get("messages", [])
+    
+    
+    def save_message(self, thread_id: str, role: str, content: str):
+        """
+        Save individual message to conversation history
+        
+        Args:
+            thread_id: Conversation thread ID
+            role: "user" or "assistant"
+            content: Message content
+        """
+        if thread_id not in self.conversations:
+            self.conversations[thread_id] = {
+                "messages": [],
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
+        
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        self.conversations[thread_id]["messages"].append(message)
+        self.conversations[thread_id]["updated_at"] = datetime.now().isoformat()
+        
+        # Save to disk immediately
+        self._save_conversations()
+        print(f"💾 Message saved to thread {thread_id}: {role}")
+    
     
     
     def _build_graph(self):
@@ -55,15 +135,20 @@ class ChatWorkflow:
         workflow = StateGraph(ChatState)
         
         # Add nodes
+        workflow.add_node("load_memory", self.load_memory)
         workflow.add_node("classify_query", self.classify_query)
         workflow.add_node("retrieve_files", self.retrieve_files)
         workflow.add_node("generate_sql", self.generate_sql)
         workflow.add_node("execute_sql", self.execute_sql)
         workflow.add_node("format_response", self.format_response)
         workflow.add_node("handle_rag", self.handle_rag)
+        workflow.add_node("generate_rag_answer", self.generate_rag_answer)
         
         # Set entry point
-        workflow.set_entry_point("classify_query")
+        workflow.set_entry_point("load_memory")
+        
+        # Load memory first, then classify
+        workflow.add_edge("load_memory", "classify_query")
         
         # Add conditional routing
         workflow.add_conditional_edges(
@@ -82,9 +167,33 @@ class ChatWorkflow:
         workflow.add_edge("format_response", END)
         
         # RAG flow
-        workflow.add_edge("handle_rag", END)
+        workflow.add_edge("handle_rag", "generate_rag_answer")
+        workflow.add_edge("generate_rag_answer", END)
         
+        # Compile without checkpointer (using JSON-based memory)
         return workflow.compile()
+    
+    
+    # ============= NODE 0: LOAD MEMORY =============
+    def load_memory(self, state: ChatState) -> ChatState:
+        """Load conversation history from database"""
+        print("\n" + "="*60)
+        print("NODE 0: LOADING CONVERSATION HISTORY")
+        print("="*60)
+        
+        # Get thread_id from state (will be passed via config)
+        thread_id = state.get("thread_id", "default_thread")
+        
+        # Retrieve conversation history from SQLite
+        history = self.get_conversation_history(thread_id)
+        state["messages"] = history
+        
+        if history:
+            print(f"✅ Loaded {len(history)} previous messages from thread: {thread_id}")
+        else:
+            print(f"📝 Starting new conversation thread: {thread_id}")
+        
+        return state
     
     
     # ============= NODE 1: CLASSIFY QUERY =============
@@ -290,17 +399,82 @@ Provide a clear, concise answer. If it's a table, summarize key findings.
         print("NODE 6: HANDLING RAG QUERY")
         print("="*60)
         
-        # TODO: Implement RAG for general documents
-        # This would use your existing document vectorization
-        state["final_response"] = "RAG functionality coming soon!"
-        state["sources"] = []
+        # Search for similar chunks in documents
+        chunks = self.doc_service.search_similar_chunks(
+            department=state["department"],
+            query=state["query"],
+            top_k=3
+        )
+        
+        state["relevant_files"] = chunks
+        state["sources"] = [chunk.get("source", "Unknown") for chunk in chunks]
+        
+        print(f"✅ Retrieved {len(chunks)} similar chunks\n")
+        
+        return state
+    
+    
+    # ============= NODE 7: GENERATE RAG ANSWER =============
+    def generate_rag_answer(self, state: ChatState) -> ChatState:
+        """Generate answer from RAG retrieved chunks using LLM"""
+        print("\n" + "="*60)
+        print("NODE 7: GENERATING RAG ANSWER")
+        print("="*60)
+        
+        if not state["relevant_files"]:
+            state["final_response"] = "No relevant information found in the knowledge base."
+            return state
+        
+        # Combine chunks into context
+        context = "\n\n".join([
+            f"[Source: {chunk.get('source', 'Unknown')}]\n{chunk['text']}"
+            for chunk in state["relevant_files"]
+        ])
+        
+        prompt = ChatPromptTemplate.from_template("""You are a helpful AI assistant. Based on the following retrieved documents, provide a clear and concise answer to the user's question.
+
+Retrieved Documents:
+{context}
+
+User Question: {query}
+
+Provide a well-summarized answer based on the retrieved information. If the information is not directly relevant, say so and explain what you found instead.""")
+        
+        chain = prompt | self.llm
+        response = chain.invoke({
+            "context": context,
+            "query": state["query"]
+        })
+        
+        state["final_response"] = response.content
+        print(f"✅ RAG answer generated\n")
         
         return state
     
     
     # ============= RUN WORKFLOW =============
-    def run(self, query: str, department: str) -> ChatState:
-        """Run the complete workflow"""
+    def run(self, query: str, department: str, user_id: str, thread_id: str = None) -> ChatState:
+        """
+        Run the complete workflow with persistent JSON-based memory per user
+        
+        Args:
+            query: User's question
+            department: Department context
+            user_id: REQUIRED - Unique identifier for the user (from JWT token or session)
+            thread_id: Optional - Specific conversation thread. If None, uses user_id
+        
+        Returns:
+            ChatState with the final response
+        """
+        if not user_id:
+            raise ValueError("user_id is required for persistent memory!")
+        
+        # Use user_id as thread_id if not specified (each user has separate memory)
+        thread_id = thread_id or f"user_{user_id}"
+        
+        # Retrieve conversation history for initial state
+        history = self.get_conversation_history(thread_id)
+        
         initial_state = {
             "query": query,
             "department": department,
@@ -310,8 +484,19 @@ Provide a clear, concise answer. If it's a table, summarize key findings.
             "sql_results": [],
             "final_response": "",
             "sources": [],
-            "error": ""
+            "error": "",
+            "messages": history,
+            "thread_id": thread_id,
+            "user_id": user_id
         }
         
+        # Run the workflow (no config needed with JSON memory)
         result = self.graph.invoke(initial_state)
+        
+        # Save messages to history
+        self.save_message(thread_id, "user", query)
+        self.save_message(thread_id, "assistant", result.get("final_response", ""))
+        
+        print(f"✅ Conversation saved (user: {user_id}, thread: {thread_id})")
+        
         return result

@@ -57,7 +57,8 @@ async def chat_query(
         # Run through LangGraph workflow
         result = workflow.run(
             query=request.query,
-            department=department
+            department=department,
+            user_id=current_user.email
         )
         
         # Save to chat history
