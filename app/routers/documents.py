@@ -110,12 +110,13 @@ async def upload_document(
         )
         
         db.add(new_document)
-        db.commit()
+        db.flush()  # Flush to get the ID without committing
         db.refresh(new_document)
-        print(f"✅ Saved to database with ID: {new_document.id}")
+        print(f"✅ Flushed to database with ID: {new_document.id}")
         
     except Exception as e:
         # If database fails, delete the uploaded file
+        db.rollback()
         os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     
@@ -128,12 +129,14 @@ async def upload_document(
             # Update database with chunk count
             new_document.chunk_count = chunk_count
             new_document.vectorized = "yes"
-            db.commit()
+            db.flush()  # Flush changes without committing yet
             
             print(f"✅ Vectorized into {chunk_count} chunks\n")
             
         except Exception as e:
+            db.rollback()
             print(f"❌ Vectorization failed: {str(e)}")
+            
     elif(new_document.file_type in ['xlsx', 'xls', 'csv']):
         try:
             print("🔄 Starting description vectorization for CSV/XLSX...")
@@ -142,11 +145,12 @@ async def upload_document(
             
             # Update database to indicate description vectorized
             new_document.vectorized = "yes"
-            db.commit()
+            db.flush()  # Flush changes without committing yet
             
             print(f"✅ Description vectorization complete\n")
             
         except Exception as e:
+            db.rollback()
             print(f"❌ Description vectorization failed: {str(e)}")
 
     # Return response

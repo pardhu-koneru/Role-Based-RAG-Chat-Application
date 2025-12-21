@@ -2,22 +2,18 @@
 Document Service - Handles vectorization
 
 This file:
-1. Splits documents into chunks
-2. Creates embeddings using Gemini
+1. Splits documents into chunks (optimized for markdown and text files)
+2. Creates embeddings using Ollama
 3. Stores in ChromaDB vector database
 """
 
-# from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-# from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
-# from langchain.schema import Document as LangchainDocument
 from langchain_core.documents import Document as LangchainDocument
 
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 from services.file_parser import FileParser
 from models import Document
@@ -30,26 +26,143 @@ class DocumentService:
     def __init__(self):
         print("🔧 Initializing Document Service...")
         
-        # 1. Setup Gemini embeddings
-        self.embeddings =OllamaEmbeddings(
+        # 1. Setup Ollama embeddings
+        self.embeddings = OllamaEmbeddings(
             model="nomic-embed-text",
             base_url="http://localhost:11434"
         )
         print("✅ Ollama embeddings initialized")
         
-        # 2. Setup text splitter (breaks text into chunks)
+        # 2. Setup text splitter with optimized parameters
+        # Chunk size: 800-1000 chars (balanced for context and efficiency)
+        # Overlap: 250 chars (~25-30%) to maintain semantic continuity
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,  # Each chunk = 1000 characters
-            chunk_overlap=200,  # Overlap 200 chars between chunks
+            chunk_size=900,
+            chunk_overlap=250,
             length_function=len,
+            separators=["\n\n", "\n", " ", ""]  # Prioritize meaningful boundaries
         )
-        print("✅ Text splitter initialized")
+        print("✅ Text splitter initialized (900 chars, 250 overlap)")
         
-        # 3. Create vectorstore directory
+        # 3. Setup Markdown header splitter for .md files
+        # Headers act as semantic boundaries for markdown documents
+        self.markdown_header_splitter = MarkdownHeaderTextSplitter(
+            headers_to_split_on=[
+                ("#", "Header 1"),
+                ("##", "Header 2"),
+                ("###", "Header 3"),
+                ("####", "Header 4"),
+            ]
+        )
+        print("✅ Markdown header splitter initialized")
+        
+        # 4. Create vectorstore directory
         self.vectorstore_dir = Path("vectorstores")
         self.vectorstore_dir.mkdir(exist_ok=True)
         print(f"✅ Vectorstore directory: {self.vectorstore_dir}\n")
     
+    
+    def _split_markdown(self, text_content: str, filename: str) -> List[Tuple[str, dict]]:
+        """
+        Smart splitting for markdown files using header-based strategy
+        
+        Args:
+            text_content: Raw markdown text
+            filename: Original filename
+            
+        Returns:
+            List of (chunk_text, metadata) tuples
+        """
+        print("  📊 Markdown splitting strategy: Header-aware two-tier approach")
+        
+        # TIER 1: Split by markdown headers to preserve document structure
+        try:
+            markdown_docs = self.markdown_header_splitter.split_text(text_content)
+            print(f"  ✂️  Tier 1: Split into {len(markdown_docs)} header sections")
+        except Exception as e:
+            print(f"  ⚠️  Header splitting failed, using recursive splitting: {str(e)}")
+            markdown_docs = []
+        
+        chunks_with_metadata = []
+        
+        # TIER 2: Apply recursive splitting to large header sections
+        for doc in markdown_docs:
+            # Check if this section needs further splitting
+            if len(doc.page_content) > 1200:  # If larger than optimal chunk size
+                # Further split large sections
+                sub_chunks = self.text_splitter.split_text(doc.page_content)
+                
+                # Get header context from metadata
+                header_context = []
+                if "Header 1" in doc.metadata:
+                    header_context.append(doc.metadata["Header 1"])
+                if "Header 2" in doc.metadata:
+                    header_context.append(doc.metadata["Header 2"])
+                if "Header 3" in doc.metadata:
+                    header_context.append(doc.metadata["Header 3"])
+                if "Header 4" in doc.metadata:
+                    header_context.append(doc.metadata["Header 4"])
+                
+                for chunk in sub_chunks:
+                    chunks_with_metadata.append((
+                        chunk,
+                        {
+                            "section_path": " > ".join(header_context) if header_context else "Root",
+                            "header_level": len(header_context)
+                        }
+                    ))
+            else:
+                # Keep smaller sections as-is with header context
+                header_context = []
+                if "Header 1" in doc.metadata:
+                    header_context.append(doc.metadata["Header 1"])
+                if "Header 2" in doc.metadata:
+                    header_context.append(doc.metadata["Header 2"])
+                if "Header 3" in doc.metadata:
+                    header_context.append(doc.metadata["Header 3"])
+                if "Header 4" in doc.metadata:
+                    header_context.append(doc.metadata["Header 4"])
+                
+                chunks_with_metadata.append((
+                    doc.page_content,
+                    {
+                        "section_path": " > ".join(header_context) if header_context else "Root",
+                        "header_level": len(header_context)
+                    }
+                ))
+        
+        # Fallback: If header splitting didn't work, use recursive splitting
+        if not chunks_with_metadata:
+            print(f"  ℹ️  Using recursive fallback for markdown file")
+            chunks = self.text_splitter.split_text(text_content)
+            chunks_with_metadata = [(chunk, {"section_path": "Root", "header_level": 0}) for chunk in chunks]
+        
+        print(f"  ✅ Markdown splitting complete: {len(chunks_with_metadata)} final chunks")
+        return chunks_with_metadata
+    
+    
+    def _split_text(self, text_content: str, filename: str) -> List[Tuple[str, dict]]:
+        """
+        Standard splitting for .txt and other text files
+        
+        Args:
+            text_content: Raw text content
+            filename: Original filename
+            
+        Returns:
+            List of (chunk_text, metadata) tuples
+        """
+        print("  📊 Text file splitting strategy: Recursive character splitting (optimized)")
+        
+        chunks = self.text_splitter.split_text(text_content)
+        print(f"  ✂️  Split into {len(chunks)} chunks")
+        
+        chunks_with_metadata = [
+            (chunk, {"section_path": "Root", "header_level": 0}) 
+            for chunk in chunks
+        ]
+        
+        return chunks_with_metadata
     
     def process_and_vectorize(self, document: Document) -> int:
         """
@@ -57,7 +170,7 @@ class DocumentService:
         
         Steps:
         1. Parse file (convert to text)
-        2. Split into chunks
+        2. Split into chunks using intelligent strategy
         3. Create embeddings
         4. Store in ChromaDB
         
@@ -68,6 +181,7 @@ class DocumentService:
         print(f"\n{'='*60}")
         print(f"🔄 PROCESSING: {document.original_filename}")
         print(f"📁 Department: {document.department}")
+        print(f"📄 File Type: {document.file_type}")
         print(f"{'='*60}\n")
         
         # STEP 1: Parse file and get text content
@@ -75,24 +189,32 @@ class DocumentService:
         text_content, dataframe = FileParser.parse_file(document.file_path)
         print(f"📝 Extracted {len(text_content)} characters\n")
         
-        # STEP 2: Split text into chunks
+        # STEP 2: Split text into chunks with intelligent strategy
         print("Step 2: Splitting into chunks...")
-        chunks = self.text_splitter.split_text(text_content)
-        print(f"✂️  Created {len(chunks)} chunks\n")
+        
+        # Determine splitting strategy based on file type
+        if document.file_type.lower() == '.md' or document.original_filename.lower().endswith('.md'):
+            print("➡️  Using Markdown-optimized splitting strategy\n")
+            chunks_with_metadata = self._split_markdown(text_content, document.original_filename)
+        else:
+            print("➡️  Using Standard text splitting strategy\n")
+            chunks_with_metadata = self._split_text(text_content, document.original_filename)
         
         # STEP 3: Create LangChain Document objects with metadata
         print("Step 3: Adding metadata to chunks...")
         langchain_docs = []
         
-        for i, chunk in enumerate(chunks):
+        for i, (chunk_text, chunk_meta) in enumerate(chunks_with_metadata):
             doc = LangchainDocument(
-                page_content=chunk,
+                page_content=chunk_text,
                 metadata={
                     "source": document.original_filename,
                     "document_id": document.id,
                     "department": document.department,
                     "chunk_index": i,
-                    "file_type": document.file_type
+                    "file_type": document.file_type,
+                    "section_path": chunk_meta.get("section_path", "Root"),
+                    "header_level": chunk_meta.get("header_level", 0)
                 }
             )
             langchain_docs.append(doc)
@@ -125,7 +247,7 @@ class DocumentService:
         print(f"✅ Vectorization complete!\n")
         print(f"{'='*60}\n")
         
-        return len(chunks)
+        return len(langchain_docs)
     
     
     def get_vectorstore(self, department: str):
@@ -153,7 +275,7 @@ class DocumentService:
     
     def search_similar_chunks(self, department: str, query: str, top_k: int = 5):
         """
-        Search for similar chunks in vector database
+        Search for similar chunks in vector database with enhanced metadata
         
         Args:
             department: Which department's data to search
@@ -161,7 +283,7 @@ class DocumentService:
             top_k: How many chunks to return
             
         Returns:
-            List of (chunk_text, metadata) tuples
+            List of chunks with enhanced metadata
         """
         vectorstore = self.get_vectorstore(department)
         
@@ -181,13 +303,16 @@ class DocumentService:
         # Invoke the retriever to get actual documents
         docs = retriever.invoke(query)
         
-        # Extract text and metadata
+        # Extract text and metadata with section context
         chunks = []
         for doc in docs:
             chunks.append({
                 "text": doc.page_content,
                 "source": doc.metadata.get("source", "Unknown"),
-                "chunk_index": doc.metadata.get("chunk_index", 0)
+                "section_path": doc.metadata.get("section_path", "Root"),
+                "header_level": doc.metadata.get("header_level", 0),
+                "chunk_index": doc.metadata.get("chunk_index", 0),
+                "file_type": doc.metadata.get("file_type", "unknown")
             })
         
         print(f"✅ Found {len(chunks)} relevant chunks\n")

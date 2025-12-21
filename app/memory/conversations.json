@@ -34,5 +34,76 @@
     ],
     "created_at": "2025-12-19T19:15:36.096032",
     "updated_at": "2025-12-19T19:28:01.472298"
+  },
+  "user_angelina@gmail.com": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "What was the customer acquisition target in Q14",
+        "timestamp": "2025-12-21T21:27:54.459710"
+      },
+      {
+        "role": "assistant",
+        "content": "It seems like we don't have any data available for the customer acquisition target in Q14. If you need to find this information, I'd be happy to help you explore other options or provide guidance on where to look.",
+        "timestamp": "2025-12-21T21:27:54.460942"
+      },
+      {
+        "role": "user",
+        "content": "HI",
+        "timestamp": "2025-12-21T21:28:37.990375"
+      },
+      {
+        "role": "user",
+        "content": "List out the employees who earn more than 50000",
+        "timestamp": "2025-12-21T21:30:10.754253"
+      },
+      {
+        "role": "assistant",
+        "content": "Based on the data, here are the employees who earn more than $50,000:\n\n- Aadhya Patel from the Sales department with a salary of $1,332,478.37\n- Isha Chowdhury from the Finance department with a salary of $1,491,158.23\n- Sakshi Malhotra from the Sales department with a salary of $1,448,927.95\n- Aadhya Saxena from the Marketing department with a salary of $1,922,205.04\n- Shaurya Joshi from the Finance department with a salary of $1,085,205.18\n- Prisha Mehta from the Marketing department with a salary of $1,149,019.58\n\nThese employees are among the highest earners in the company, with salaries exceeding $50,000.",
+        "timestamp": "2025-12-21T21:30:10.759259"
+      },
+      {
+        "role": "user",
+        "content": "List out the employees who work as UX Designer",
+        "timestamp": "2025-12-21T21:32:59.151880"
+      },
+      {
+        "role": "assistant",
+        "content": "Here are the employees who work as UX Designers:\n\n- Saanvi Bhat\n- Krishna Nair\n- Aarav Kapoor\n\nAll three of these individuals work in the Design department.",
+        "timestamp": "2025-12-21T21:32:59.160523"
+      },
+      {
+        "role": "user",
+        "content": "how many leaves were taken by Isha Chowdhury",
+        "timestamp": "2025-12-21T21:34:32.692940"
+      },
+      {
+        "role": "assistant",
+        "content": "Isha Chowdhury took 3 leaves.",
+        "timestamp": "2025-12-21T21:34:32.693648"
+      },
+      {
+        "role": "user",
+        "content": "what is the salary of isha nair",
+        "timestamp": "2025-12-21T22:17:39.439712"
+      },
+      {
+        "role": "assistant",
+        "content": "No relevant information found in the knowledge base.",
+        "timestamp": "2025-12-21T22:17:39.440830"
+      },
+      {
+        "role": "user",
+        "content": "about whom did i ask now",
+        "timestamp": "2025-12-21T22:19:08.906428"
+      },
+      {
+        "role": "assistant",
+        "content": "No relevant information found in the knowledge base.",
+        "timestamp": "2025-12-21T22:19:08.912857"
+      }
+    ],
+    "created_at": "2025-12-21T21:13:42.878374",
+    "updated_at": "2025-12-21T22:19:08.912857"
   }
 }
