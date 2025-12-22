@@ -8,6 +8,7 @@ This implements the complete flow using LangGraph
 from typing import TypedDict, Literal, List
 from langgraph.graph import StateGraph, END
 from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 import pandas as pd
@@ -16,6 +17,7 @@ import os
 import json
 from datetime import datetime
 from config import settings
+from dotenv import load_dotenv
 from services.description_vectorizer import DescriptionVectorizer
 from services.document_service import DocumentService
 from services.query_classifier import QueryClassifier
@@ -51,10 +53,10 @@ class ChatWorkflow:
     
     def __init__(self):
         # Initialize LLM (Groq - FREE and fast!)
-        self.llm = ChatGroq(
-            api_key=settings.GROQ_API_KEY,
-            model="llama-3.1-8b-instant",  # Fast and free
-            temperature=0
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            temperature=0.0,
+            google_api_key=settings.GOOGLE_API_KEY
         )
         
         # Initialize services
@@ -168,14 +170,20 @@ class ChatWorkflow:
             self.route_query_type,
             {
                 "sql_with_tables": "retrieve_files",
-                "sql_no_tables": "handle_rag",
                 "rag": "handle_rag",
                 "hybrid": "handle_hybrid_query"
             }
         )
         
-        # SQL flow
-        workflow.add_edge("retrieve_files", "generate_sql")
+        # SQL flow with fallback to RAG if no files found
+        workflow.add_conditional_edges(
+            "retrieve_files",
+            self.route_after_file_retrieval,
+            {
+                "generate_sql": "generate_sql",
+                "handle_rag": "handle_rag"
+            }
+        )
         workflow.add_edge("generate_sql", "execute_sql")
         workflow.add_edge("execute_sql", "format_response")
         workflow.add_edge("format_response", END)
@@ -253,15 +261,22 @@ class ChatWorkflow:
         has_tables = state.get("has_tables", False)
         
         if query_type == "sql":
-            if has_tables:
-                return "sql_with_tables"
-            else:
-                # No tables available, fallback to RAG
-                return "sql_no_tables"
+            return "sql_with_tables"
+        
         elif query_type == "hybrid":
             return "hybrid"
         else:  # rag
             return "rag"
+    
+    
+    def route_after_file_retrieval(self, state: ChatState) -> Literal["generate_sql", "handle_rag"]:
+        """Route based on whether files were actually retrieved"""
+        # If no files found during retrieval, fallback to RAG
+        if not state.get("relevant_files"):
+            print("\n⚠️  No relevant files found for SQL query, falling back to RAG...\n")
+            return "handle_rag"
+        else:
+            return "generate_sql"
     
     
     # ============= NODE 2: RETRIEVE FILES =============
@@ -374,8 +389,9 @@ Your code:
                 print(f"✅ Query executed: {len(result)} rows returned")
                 print(f"📊 Showing first 10 rows\n")
             elif isinstance(result, pd.Series):
-                state["sql_results"] = result.to_dict()
-                print(f"✅ Query executed: Series returned\n")
+                # Convert Series to list of values with index
+                state["sql_results"] = [{"index": idx, "value": val} for idx, val in result.items()]
+                print(f"✅ Query executed: Series returned ({len(result)} values)\n")
             else:
                 state["sql_results"] = [{"result": str(result)}]
                 print(f"✅ Query executed: {result}\n")
@@ -575,8 +591,9 @@ Your code:
                 state["sql_results"] = result.head(10).to_dict(orient='records')
                 print(f"✅ SQL executed: {len(result)} rows returned\n")
             elif isinstance(result, pd.Series):
-                state["sql_results"] = result.to_dict()
-                print(f"✅ SQL executed: Series returned\n")
+                # Convert Series to list of values with index
+                state["sql_results"] = [{"index": idx, "value": val} for idx, val in result.items()]
+                print(f"✅ SQL executed: Series returned ({len(result)} values)\n")
             else:
                 state["sql_results"] = [{"result": str(result)}]
                 print(f"✅ SQL executed: {result}\n")

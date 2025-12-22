@@ -25,3 +25,4 @@ pandas
 openpyxl
 python-markdown
 langgraph-checkpoint-sqlite
+dotenv

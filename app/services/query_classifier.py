@@ -42,30 +42,72 @@ class QueryClassifier:
         print("CLASSIFYING QUERY")
         print("="*60)
         
-        prompt = ChatPromptTemplate.from_template("""You are a query classifier. Determine if the user wants:
-1. DATA ANALYSIS (sql) - filtering, counting, aggregating data from tables
-2. GENERAL INFORMATION (rag) - explanations, policies, concepts from documents
-3. HYBRID (both) - queries that need BOTH data analysis AND document information
+        prompt = ChatPromptTemplate.from_template("""
+You are a QUERY CLASSIFIER in a multi-stage data system.
 
-SQL indicators: show, list, count, how many, filter, average, sum, total, compare, find employees, get data
-RAG indicators: what is, explain, tell me about, why, how does, describe, policy
-HYBRID indicators: "show me employees and also explain", "list data and provide context", "get results and what does this mean"
+SYSTEM FLOW (IMPORTANT CONTEXT):
+1. You ONLY classify the user query.
+2. If classified as "sql", a separate RAG step will retrieve relevant CSV file
+   descriptions and schemas before writing and executing a pandas/SQL query.
+3. You MUST NOT assume table or column names at this stage unless explicitly mentioned.
 
-Examples:
-- "Show me all employees in finance department AND explain the company hiring policy" -> hybrid
-- "How many employees are in HR?" -> sql
-- "What is our company policy on remote work?" -> rag
-- "List all employees earning above 100k AND provide context about salary bands" -> hybrid
+────────────────────────────────────
+YOUR TASK:
+Classify the query based on the INTENT of the user, not keywords.
 
-Query: {query}
+Choose exactly ONE type:
 
-IMPORTANT: Return ONLY valid JSON, no markdown, no extra text.
+1. "sql"
+   - User intends to retrieve, filter, aggregate, or compute structured data
+   - Query expects rows, columns, counts, sums, comparisons, or exact values
+   - Even if the exact file or table is unknown at this stage
+
+2. "rag"
+   - User asks for explanations, summaries, reasoning, strategies, policies,
+     objectives, or conceptual information
+   - Answer comes from document text, NOT computed data
+
+3. "hybrid"
+   - User asks for BOTH:
+     a) structured data retrieval AND
+     b) explanation, reasoning, or interpretation
+   - OR query is ambiguous and could require both paths
+
+────────────────────────────────────
+STRICT CLASSIFICATION RULES:
+
+• If the expected answer is a NUMBER, LIST, ROW, or COMPUTED VALUE → SQL
+• If the expected answer is TEXTUAL EXPLANATION → RAG
+• If the expected answer is DATA + CONTEXT → HYBRID
+• Do NOT decide based on where data exists — decide based on what the user wants
+• If unsure → HYBRID with lower confidence
+
+────────────────────────────────────
+EXAMPLES:
+
+"What is the salary of Isha Nair?" → sql
+"List employees in the finance department" → sql
+"How many customers were acquired in Q1?" → sql
+"Explain the marketing strategy for Europe" → rag
+"Why did customer acquisition drop in France?" → rag
+"Show Q1 revenue and explain the shortfall" → hybrid
+"Compare planned vs actual revenue and give insights" → hybrid
+
+────────────────────────────────────
+USER QUERY:
+{query}
+
+────────────────────────────────────
+RETURN ONLY VALID JSON:
+
 {{
-    "type": "sql",
-    "confidence": 0.95,
-    "reasoning": "User is asking to show/filter data",
-    "has_tables": true
-}}""")
+  "type": "sql | rag | hybrid",
+  "confidence": 0.0-1.0,
+  "reasoning": "Short explanation focused on user intent"
+}}
+""")
+
+
         
         chain = prompt | self.llm
         response = chain.invoke({"query": query})
