@@ -70,7 +70,7 @@ async def upload_document(
             )
     
     # Step 4: Create folder to save file
-    save_folder = Path(f"uploads/{department}")
+    save_folder = Path(f"uploads/{department}").resolve()  # Convert to absolute path
     save_folder.mkdir(parents=True, exist_ok=True)
     
     # Step 5: Create unique filename (with timestamp)

@@ -77,32 +77,50 @@ class DescriptionVectorizer:
         """
         Search for relevant CSV/XLSX files based on query
         Returns file paths and metadata
+        
+        Args:
+            department: Single department or "all" for multi-department search
+            query: User query to search for
+            top_k: Number of results per department
         """
-        vectorstore_path = self.vectorstore_dir / f"{department}_descriptions"
-        
-        if not vectorstore_path.exists():
-            print(f"⚠️  No description store for {department}")
-            return []
-        
         print(f"\n🔍 Searching descriptions in {department}...")
         print(f"📝 Query: {query}")
         
-        vectorstore = Chroma(
-            persist_directory=str(vectorstore_path),
-            embedding_function=self.embeddings
-        )
+        # Determine which departments to search
+        if department == "all":
+            # Search all departments
+            departments_to_search = ["hr", "finance", "marketing", "engineering", "general"]
+        else:
+            departments_to_search = [department]
         
-        # Search for similar descriptions
-        results = vectorstore.similarity_search(query, k=top_k)
+        all_files = []
         
-        files = []
-        for doc in results:
-            files.append({
-                "document_id": doc.metadata["document_id"],
-                "filename": doc.metadata["filename"],
-                "file_path": doc.metadata["file_path"],
-                "description": doc.page_content
-            })
+        # Search each department
+        for dept in departments_to_search:
+            vectorstore_path = self.vectorstore_dir / f"{dept}_descriptions"
+            
+            if not vectorstore_path.exists():
+                print(f"⚠️  No description store for {dept}, skipping...")
+                continue
+            
+            print(f"  📂 Searching {dept} descriptions...")
+            
+            vectorstore = Chroma(
+                persist_directory=str(vectorstore_path),
+                embedding_function=self.embeddings
+            )
+            
+            # Search for similar descriptions
+            results = vectorstore.similarity_search(query, k=top_k)
+            
+            for doc in results:
+                all_files.append({
+                    "document_id": doc.metadata["document_id"],
+                    "filename": doc.metadata["filename"],
+                    "file_path": doc.metadata["file_path"],
+                    "description": doc.page_content,
+                    "department": doc.metadata["department"]
+                })
         
-        print(f"✅ Found {len(files)} relevant files\n")
-        return files
+        print(f"✅ Found {len(all_files)} relevant files across departments\n")
+        return all_files

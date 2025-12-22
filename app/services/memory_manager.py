@@ -23,6 +23,23 @@ class ConversationMemoryManager:
     Extracts and maintains context from previous messages
     """
     
+    # Meta-question patterns that ask about conversation history, not data
+    META_QUESTION_KEYWORDS = {
+        # Asking to repeat/recall previous queries
+        "what did i just ask", "what did i ask", "what was my last question",
+        "repeat that", "say that again", "tell me again", "what did you answer",
+        "what was my previous question", "previous question", "last question",
+        "what was i asking", "remind me what i asked", "summarize our conversation",
+        "what have we discussed", "what did we talk about", "recap",
+        
+        # Asking for clarification on what was retrieved
+        "what data did you retrieve", "what files did you access", "what documents",
+        "what was in that query", "what did that search find", "what results",
+        
+        # Direct references to conversation
+        "in our previous conversation", "earlier you said", "as we discussed",
+    }
+    
     def __init__(self, llm):
         """
         Initialize ConversationMemoryManager
@@ -31,6 +48,66 @@ class ConversationMemoryManager:
             llm: Language model instance (e.g., ChatGroq)
         """
         self.llm = llm
+    
+    def is_meta_question(self, query: str) -> bool:
+        """
+        Detect if query is asking about the conversation history itself
+        (meta-question) rather than requesting new data
+        
+        Args:
+            query: User's query
+            
+        Returns:
+            bool: True if this is a meta-question about conversation history
+        """
+        query_lower = query.lower().strip()
+        
+        # Check if query matches any meta-question patterns
+        for pattern in self.META_QUESTION_KEYWORDS:
+            if pattern in query_lower:
+                return True
+        
+        # Additional heuristics
+        # If very short and starts with question word, likely meta
+        if len(query) < 30 and query_lower.startswith(('what', 'tell', 'remind', 'repeat', 'recap')):
+            return True
+        
+        return False
+    
+    def generate_meta_response(self, context: ConversationContext) -> str:
+        """
+        Generate response to meta-questions about conversation history
+        WITHOUT executing any new queries or hallucinating data
+        
+        Args:
+            context: ConversationContext extracted from conversation history
+            
+        Returns:
+            Formatted summary of previous conversation
+        """
+        if not context["previous_queries"]:
+            return "You haven't asked any questions yet in this conversation."
+        
+        response_parts = []
+        
+        # Present ONLY what was actually asked and found
+        response_parts.append("📋 **Your Previous Queries:**")
+        for i, query in enumerate(context["previous_queries"], 1):
+            response_parts.append(f"{i}. {query}")
+        
+        # Include conversation summary if available
+        if context["summary"]:
+            response_parts.append("\n📝 **Conversation Summary:**")
+            response_parts.append(context["summary"])
+        
+        # Include departments that were relevant
+        if context["relevant_departments"]:
+            response_parts.append("\n🏢 **Departments Discussed:**")
+            response_parts.append(", ".join(context["relevant_departments"]))
+        
+        response_parts.append("\n💡 **Next Step:** Ask me a new question or request more details about the above topics.")
+        
+        return "\n".join(response_parts)
     
     def should_summarize(self, messages: List[dict]) -> bool:
         """

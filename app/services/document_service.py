@@ -278,45 +278,57 @@ class DocumentService:
         Search for similar chunks in vector database with enhanced metadata
         
         Args:
-            department: Which department's data to search
+            department: Single department or "all" for multi-department search
             query: User's question
-            top_k: How many chunks to return
+            top_k: How many chunks to return per department
             
         Returns:
-            List of chunks with enhanced metadata
+            List of chunks with enhanced metadata, sorted by relevance
         """
-        vectorstore = self.get_vectorstore(department)
-        
-        if not vectorstore:
-            return []
-        
         print(f"🔍 Searching in {department} vectorstore...")
         print(f"📝 Query: {query}")
-        print(f"🎯 Top {top_k} results\n")
+        print(f"🎯 Top {top_k} results per department\n")
         
-        # Perform similarity search using the retriever
-        retriever = vectorstore.as_retriever(
-            search_type="similarity",  # "similarity" or "mmr" (Maximum Marginal Relevance)
-            search_kwargs={"k": top_k}  # Number of documents to return
-        )
+        # Determine which departments to search
+        if department == "all":
+            departments_to_search = ["hr", "finance", "marketing", "engineering", "general"]
+        else:
+            departments_to_search = [department]
         
-        # Invoke the retriever to get actual documents
-        docs = retriever.invoke(query)
+        all_chunks = []
         
-        # Extract text and metadata with section context
-        chunks = []
-        for doc in docs:
-            chunks.append({
-                "text": doc.page_content,
-                "source": doc.metadata.get("source", "Unknown"),
-                "section_path": doc.metadata.get("section_path", "Root"),
-                "header_level": doc.metadata.get("header_level", 0),
-                "chunk_index": doc.metadata.get("chunk_index", 0),
-                "file_type": doc.metadata.get("file_type", "unknown")
-            })
+        # Search each department
+        for dept in departments_to_search:
+            vectorstore = self.get_vectorstore(dept)
+            
+            if not vectorstore:
+                continue
+            
+            print(f"  📚 Searching {dept} vectorstore...")
+            
+            # Perform similarity search using the retriever
+            retriever = vectorstore.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": top_k}
+            )
+            
+            # Invoke the retriever to get actual documents
+            docs = retriever.invoke(query)
+            
+            # Extract text and metadata with section context
+            for doc in docs:
+                all_chunks.append({
+                    "text": doc.page_content,
+                    "source": doc.metadata.get("source", "Unknown"),
+                    "section_path": doc.metadata.get("section_path", "Root"),
+                    "header_level": doc.metadata.get("header_level", 0),
+                    "chunk_index": doc.metadata.get("chunk_index", 0),
+                    "file_type": doc.metadata.get("file_type", "unknown"),
+                    "department": doc.metadata.get("department", dept)
+                })
         
-        print(f"✅ Found {len(chunks)} relevant chunks\n")
-        return chunks
+        print(f"✅ Found {len(all_chunks)} relevant chunks across departments\n")
+        return all_chunks
     
     
     def delete_document_from_vectorstore(self, document: Document):

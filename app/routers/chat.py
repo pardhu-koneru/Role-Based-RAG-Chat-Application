@@ -46,11 +46,10 @@ async def chat_query(
     print("="*70)
     
     try:
-        # Determine accessible department
+        # Determine accessible department(s)
         if current_user.role in ['admin', 'clevel']:
-            # For demo, default to HR for SQL queries
-            # In production, LLM could determine which department
-            department = "hr"  
+            # Admins get access to all departments for comprehensive search
+            department = "all"  
         else:
             department = current_user.department
         

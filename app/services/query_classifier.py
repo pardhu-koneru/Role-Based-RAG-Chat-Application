@@ -28,12 +28,13 @@ class QueryClassifier:
         """
         self.llm = llm
     
-    def classify(self, query: str) -> QueryClassificationResult:
+    def classify(self, query: str, conversation_context: dict = None) -> QueryClassificationResult:
         """
         Classify if query is SQL, RAG, or HYBRID (both) type
         
         Args:
             query: User's query string
+            conversation_context: Optional conversation context for follow-up queries
             
         Returns:
             QueryClassificationResult with classification details
@@ -41,6 +42,17 @@ class QueryClassifier:
         print("\n" + "="*60)
         print("CLASSIFYING QUERY")
         print("="*60)
+        
+        # Format conversation context for prompt
+        context_str = ""
+        if conversation_context and conversation_context.get("should_use_context"):
+            context_parts = []
+            if conversation_context.get("previous_queries"):
+                context_parts.append(f"Previous user queries: {'; '.join(conversation_context['previous_queries'][-2:])}")
+            if conversation_context.get("summary"):
+                context_parts.append(f"Conversation summary: {conversation_context['summary']}")
+            if context_parts:
+                context_str = "\n\nCONVERSATION CONTEXT:\n" + "\n".join(context_parts)
         
         prompt = ChatPromptTemplate.from_template("""
 You are a QUERY CLASSIFIER in a multi-stage data system.
@@ -50,6 +62,9 @@ SYSTEM FLOW (IMPORTANT CONTEXT):
 2. If classified as "sql", a separate RAG step will retrieve relevant CSV file
    descriptions and schemas before writing and executing a pandas/SQL query.
 3. You MUST NOT assume table or column names at this stage unless explicitly mentioned.
+4. If the user refers to PREVIOUS QUERIES (e.g., "what did I just ask", "show me that again", "tell me more"),
+   consider the CONVERSATION CONTEXT provided below and infer that the new query has the SAME classification
+   as the previous query.
 
 ────────────────────────────────────
 YOUR TASK:
@@ -82,6 +97,12 @@ STRICT CLASSIFICATION RULES:
 • Do NOT decide based on where data exists — decide based on what the user wants
 • If unsure → HYBRID with lower confidence
 
+⚠️  **CRITICAL GUARDRAILS - DO NOT VIOLATE**:
+1. NEVER assume or hallucinate column names or table structures
+2. NEVER suggest database operations for questions asking about conversation history
+3. NEVER make up data or execute queries without explicit user request for data retrieval
+4. If query is vague or about the conversation itself, classify as "rag" to handle through documents only
+
 ────────────────────────────────────
 EXAMPLES:
 
@@ -94,6 +115,8 @@ EXAMPLES:
 "Compare planned vs actual revenue and give insights" → hybrid
 
 ────────────────────────────────────
+{context}
+
 USER QUERY:
 {query}
 
@@ -106,11 +129,9 @@ RETURN ONLY VALID JSON:
   "reasoning": "Short explanation focused on user intent"
 }}
 """)
-
-
         
         chain = prompt | self.llm
-        response = chain.invoke({"query": query})
+        response = chain.invoke({"query": query, "context": context_str})
         
         # Extract and parse JSON more robustly
         try:

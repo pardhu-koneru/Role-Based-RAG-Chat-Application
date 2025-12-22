@@ -22,6 +22,7 @@ from services.description_vectorizer import DescriptionVectorizer
 from services.document_service import DocumentService
 from services.query_classifier import QueryClassifier
 from services.memory_manager import ConversationMemoryManager
+from services.query_decomposer import QueryDecomposer
 from schemas import QueryType
 
 
@@ -45,6 +46,7 @@ class ChatState(TypedDict):
     conversation_summary: str  # Summarized conversation context
     conversation_context: dict  # Extracted context from conversation
     thread_id: str  # Thread/conversation ID for this user
+    decomposed_query: dict  # For multi-part hybrid queries
 
 
 # ============= LANGGRAPH WORKFLOW =============
@@ -53,15 +55,22 @@ class ChatWorkflow:
     
     def __init__(self):
         # Initialize LLM (Groq - FREE and fast!)
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.0,
-            google_api_key=settings.GOOGLE_API_KEY
+        # self.llm = ChatGoogleGenerativeAI(
+        #     model="gemini-2.5-flash",
+        #     temperature=0.0,
+        #     google_api_key=settings.GOOGLE_API_KEY
+        # )
+    
+        self.llm = ChatGroq(
+            api_key=settings.GROQ_API_KEY,
+            model="llama-3.1-8b-instant",  # Fast and free
+            temperature=0
         )
         
         # Initialize services
         self.query_classifier = QueryClassifier(self.llm)
         self.memory_manager = ConversationMemoryManager(self.llm)
+        self.query_decomposer = QueryDecomposer(self.llm)
         self.desc_vectorizer = DescriptionVectorizer()
         self.doc_service = DocumentService()
         
@@ -146,6 +155,7 @@ class ChatWorkflow:
         # Add nodes
         workflow.add_node("load_memory", self.load_memory)
         workflow.add_node("process_memory", self.process_memory)
+        workflow.add_node("check_meta_question", self.check_meta_question)
         workflow.add_node("classify_query", self.classify_query)
         workflow.add_node("retrieve_files", self.retrieve_files)
         workflow.add_node("generate_sql", self.generate_sql)
@@ -160,9 +170,19 @@ class ChatWorkflow:
         # Set entry point
         workflow.set_entry_point("load_memory")
         
-        # Load memory first, process it, then classify
+        # Load memory first, process it, then check for meta-questions
         workflow.add_edge("load_memory", "process_memory")
-        workflow.add_edge("process_memory", "classify_query")
+        workflow.add_edge("process_memory", "check_meta_question")
+        
+        # Check if it's a meta-question and route accordingly
+        workflow.add_conditional_edges(
+            "check_meta_question",
+            self.route_after_meta_check,
+            {
+                "is_meta": END,  # Meta-question answered, done
+                "not_meta": "classify_query"  # Regular query, proceed with classification
+            }
+        )
         
         # Add conditional routing
         workflow.add_conditional_edges(
@@ -238,6 +258,33 @@ class ChatWorkflow:
         
         return state
     
+    # ============= NODE 0.75: CHECK FOR META-QUESTIONS =============
+    def check_meta_question(self, state: ChatState) -> ChatState:
+        """
+        Check if query is asking about conversation history (meta-question)
+        If yes, answer directly without going through classification/retrieval
+        """
+        print("\n" + "="*60)
+        print("NODE 0.75: CHECKING IF QUERY IS ABOUT CONVERSATION HISTORY")
+        print("="*60)
+        
+        # Check if this is a meta-question
+        is_meta = self.memory_manager.is_meta_question(state["query"])
+        
+        if is_meta:
+            print("🔍 Detected meta-question about conversation history")
+            print("⏭️  Skipping classification and retrieval, answering from context only\n")
+            
+            # Generate response from conversation context only
+            response = self.memory_manager.generate_meta_response(state["conversation_context"])
+            
+            state["final_response"] = response
+            state["query_type"] = "meta"  # Special type to indicate this was a meta-question
+            state["sources"] = ["Conversation History"]
+            
+            return state
+        
+        return state
     # ============= NODE 1: CLASSIFY QUERY =============
     def classify_query(self, state: ChatState) -> ChatState:
         """Classify if query is SQL, RAG, or HYBRID (both) type"""
@@ -245,8 +292,11 @@ class ChatWorkflow:
         print("NODE 1: CLASSIFYING QUERY")
         print("="*60)
         
-        # Use the QueryClassifier service
-        result = self.query_classifier.classify(state["query"])
+        # Use the QueryClassifier service with conversation context
+        result = self.query_classifier.classify(
+            query=state["query"],
+            conversation_context=state.get("conversation_context")
+        )
         
         state["query_type"] = result["query_type"]
         state["has_tables"] = result["has_tables"]
@@ -255,6 +305,12 @@ class ChatWorkflow:
     
     
     # ============= CONDITIONAL ROUTING =============
+    def route_after_meta_check(self, state: ChatState) -> Literal["is_meta", "not_meta"]:
+        """Route based on whether query is a meta-question"""
+        if state.get("query_type") == "meta":
+            return "is_meta"
+        return "not_meta"
+    
     def route_query_type(self, state: ChatState) -> Literal["sql_no_tables", "sql_with_tables", "rag", "hybrid"]:
         """Route based on query type and available tables"""
         query_type = state["query_type"]
@@ -294,11 +350,11 @@ class ChatWorkflow:
         )
         
         state["relevant_files"] = relevant_files
-        state["sources"] = [f["filename"] for f in relevant_files]
+        state["sources"] = [f"{f['filename']} ({f.get('department', 'Unknown')})" for f in relevant_files]
         
         print(f"📁 Found {len(relevant_files)} relevant files:")
         for f in relevant_files:
-            print(f"  - {f['filename']}")
+            print(f"  - {f['filename']} (Department: {f.get('department', 'Unknown')})")
         print()
         
         return state
@@ -376,7 +432,15 @@ Your code:
         try:
             # Load CSV
             target_file = state["relevant_files"][0]
-            df = pd.read_csv(target_file["file_path"])
+            file_path = target_file["file_path"]
+            
+            # Handle both relative and absolute paths
+            file_path_obj = Path(file_path)
+            if not file_path_obj.is_absolute():
+                # Convert relative path to absolute
+                file_path_obj = file_path_obj.resolve()
+            
+            df = pd.read_csv(str(file_path_obj))
             
             # Execute code safely
             namespace = {'df': df, 'pd': pd, 'result': None}
@@ -450,7 +514,7 @@ Provide a clear, concise answer. If it's a table, summarize key findings.
         )
         
         state["relevant_files"] = chunks
-        state["sources"] = [chunk.get("source", "Unknown") for chunk in chunks]
+        state["sources"] = [f"{chunk.get('source', 'Unknown')} ({chunk.get('department', 'Unknown')})" for chunk in chunks]
         
         print(f"✅ Retrieved {len(chunks)} similar chunks\n")
         
@@ -497,33 +561,90 @@ Provide a well-summarized answer based on the retrieved information. If the info
     
     # ============= NODE 8: HANDLE HYBRID QUERIES =============
     def handle_hybrid_query(self, state: ChatState) -> ChatState:
-        """Handle HYBRID queries - queries that need both SQL and RAG"""
+        """Handle HYBRID queries - intelligently decompose and handle multi-part queries"""
         print("\n" + "="*60)
         print("NODE 8: HANDLING HYBRID QUERY")
         print("="*60)
-        print("🔄 This query requires BOTH data analysis AND contextual information\n")
+        print("🔄 Analyzing query for multiple parts...\n")
         
-        # First, check if we have relevant files/tables to query
-        relevant_files = self.desc_vectorizer.search_relevant_files(
-            department=state["department"],
-            query=state["query"],
-            top_k=2
-        )
+        # Decompose the query into parts
+        available_depts = ["hr", "finance", "marketing", "engineering", "general"] if state["department"] == "all" else [state["department"]]
         
-        state["relevant_files"] = relevant_files
+        decomposed = self.query_decomposer.decompose_hybrid_query(state["query"], available_depts)
+        state["decomposed_query"] = decomposed
         
-        # Also retrieve RAG chunks
-        rag_chunks = self.doc_service.search_similar_chunks(
-            department=state["department"],
-            query=state["query"],
-            top_k=3
-        )
+        # If single part, handle as before
+        if not decomposed["is_multi_part"]:
+            print("✅ Single unified query, searching all relevant sources\n")
+            
+            relevant_files = self.desc_vectorizer.search_relevant_files(
+                department=state["department"],
+                query=state["query"],
+                top_k=2
+            )
+            
+            state["relevant_files"] = relevant_files
+            
+            rag_chunks = self.doc_service.search_similar_chunks(
+                department=state["department"],
+                query=state["query"],
+                top_k=3
+            )
+            
+            state["rag_chunks"] = rag_chunks
+            state["sources"] = list(set(
+                [f"{f['filename']} ({f.get('department', 'Unknown')})" for f in relevant_files] + 
+                [f"{chunk.get('source', 'Unknown')} ({chunk.get('department', 'Unknown')})" for chunk in rag_chunks]
+            ))
+            
+            print(f"📁 Found {len(relevant_files)} relevant files")
+            print(f"📚 Retrieved {len(rag_chunks)} similar chunks\n")
+            
+            return state
         
-        state["rag_chunks"] = rag_chunks
-        state["sources"] = list(set([f["filename"] for f in relevant_files] + [chunk.get("source", "Unknown") for chunk in rag_chunks]))
+        # Multi-part query: search each part separately
+        print(f"🔀 MULTI-PART QUERY DETECTED: {len(decomposed['parts'])} parts identified\n")
         
-        print(f"📁 Found {len(relevant_files)} relevant files")
-        print(f"📚 Retrieved {len(rag_chunks)} similar chunks\n")
+        all_relevant_files = []
+        all_rag_chunks = []
+        all_sources = set()
+        
+        for i, part in enumerate(decomposed["parts"], 1):
+            print(f"  Part {i}: {part['query'][:80]}...")
+            print(f"  ├─ Type: {part['query_type']}")
+            print(f"  └─ Departments: {', '.join(part['relevant_departments'])}\n")
+            
+            # Determine department for this part
+            part_dept = part['relevant_departments'][0] if part['relevant_departments'] else state["department"]
+            
+            # Search based on query type
+            if part['query_type'] in ['sql', 'sql_and_rag']:
+                # Search for structured data
+                files = self.desc_vectorizer.search_relevant_files(
+                    department=part_dept,
+                    query=part['query'],
+                    top_k=1  # Fewer per part since we're splitting
+                )
+                all_relevant_files.extend(files)
+                all_sources.update([f"{f['filename']} ({f.get('department', 'Unknown')})" for f in files])
+            
+            if part['query_type'] in ['rag', 'sql_and_rag']:
+                # Search for documents
+                chunks = self.doc_service.search_similar_chunks(
+                    department=part_dept,
+                    query=part['query'],
+                    top_k=2  # Fewer per part since we're splitting
+                )
+                all_rag_chunks.extend(chunks)
+                all_sources.update([f"{chunk.get('source', 'Unknown')} ({chunk.get('department', 'Unknown')})" for chunk in chunks])
+        
+        state["relevant_files"] = all_relevant_files
+        state["rag_chunks"] = all_rag_chunks
+        state["sources"] = list(all_sources)
+        
+        print(f"✅ AGGREGATED RESULTS:")
+        print(f"  📁 {len(all_relevant_files)} files across parts")
+        print(f"  📚 {len(all_rag_chunks)} chunks across parts\n")
         
         return state
     
@@ -535,14 +656,32 @@ Provide a well-summarized answer based on the retrieved information. If the info
         print("NODE 9: EXECUTING SQL IN HYBRID MODE")
         print("="*60)
         
+        # For multi-part queries, skip global execution
+        # Each part will handle its own execution in generate_hybrid_answer
+        decomposed = state.get("decomposed_query", {})
+        if decomposed.get("is_multi_part"):
+            print("⏭️  Multi-part query detected, skipping global SQL execution")
+            print("   (Each part will execute its own SQL independently)\n")
+            state["sql_results"] = []
+            return state
+        
+        # Single unified query: execute SQL
         if not state["relevant_files"]:
             print("⚠️  No relevant files for SQL query\n")
             state["sql_results"] = []
             return state
         
-        # Generate SQL for hybrid mode
+        # Generate SQL for unified query
         target_file = state["relevant_files"][0]
-        df = pd.read_csv(target_file["file_path"])
+        file_path = target_file["file_path"]
+        
+        # Handle both relative and absolute paths
+        file_path_obj = Path(file_path)
+        if not file_path_obj.is_absolute():
+            # Convert relative path to absolute
+            file_path_obj = file_path_obj.resolve()
+        
+        df = pd.read_csv(str(file_path_obj))
         
         df_info = f"""
 File: {target_file['filename']}
@@ -612,37 +751,92 @@ Your code:
         print("NODE 10: GENERATING HYBRID ANSWER")
         print("="*60)
         
-        # Get RAG context
-        rag_context = "\n\n".join([
-            f"[Source: {chunk.get('source', 'Unknown')}]\n{chunk['text']}"
-            for chunk in state.get("rag_chunks", [])
-        ]) if state.get("rag_chunks") else "No additional context available"
+        decomposed = state.get("decomposed_query", {})
         
-        # Format SQL results
+        # If multi-part, process each part and combine
+        if decomposed.get("is_multi_part"):
+            print(f"🔀 Generating answers for {len(decomposed['parts'])} query parts...\n")
+            
+            parts_results = []
+            
+            for i, part in enumerate(decomposed["parts"], 1):
+                part_result = self._generate_part_answer(
+                    part_query=part['query'],
+                    part_type=part['query_type'],
+                    relevant_files=[f for f in state["relevant_files"] if f.get('department') in part['relevant_departments']],
+                    rag_chunks=[c for c in state["rag_chunks"] if c.get('department') in part['relevant_departments']]
+                )
+                parts_results.append(part_result)
+            
+            # Combine results from all parts
+            combined_response = self.query_decomposer.combine_results(parts_results)
+            state["final_response"] = combined_response
+            
+            print(f"✅ Hybrid answer generated from {len(parts_results)} parts\n")
+            
+            return state
+        
+        # Single unified hybrid query (original behavior)
+        print("✅ Single unified hybrid query, combining all sources\n")
+        
+        # Get SQL data with department info from relevant_files
+        sql_department_info = ""
+        if state.get("relevant_files"):
+            sql_sources = list(set([f.get('department', 'Unknown') for f in state["relevant_files"]]))
+            sql_department_info = f"(Source Department(s): {', '.join(sql_sources)})"
+        
+        # Format SQL results with department context
         sql_results_text = str(state.get("sql_results", [])) if state.get("sql_results") else "No SQL results"
+        sql_section = f"""DATABASE QUERY RESULTS {sql_department_info}:
+{sql_results_text}"""
         
-        prompt = ChatPromptTemplate.from_template("""You are a helpful AI assistant. The user asked a question that requires both data analysis and contextual information.
+        # Get RAG context with department info
+        rag_chunks_with_dept = []
+        if state.get("rag_chunks"):
+            for chunk in state["rag_chunks"]:
+                dept = chunk.get('department', 'Unknown')
+                source = chunk.get('source', 'Unknown')
+                rag_chunks_with_dept.append({
+                    "text": chunk['text'],
+                    "source": source,
+                    "department": dept
+                })
+        
+        rag_context = "\n\n".join([
+            f"[Source: {chunk['source']} | Department: {chunk['department']}]\n{chunk['text']}"
+            for chunk in rag_chunks_with_dept
+        ]) if rag_chunks_with_dept else "No additional context available"
+        
+        rag_section = f"""DOCUMENT/KNOWLEDGE BASE CONTEXT:
+{rag_context}"""
+        
+        prompt = ChatPromptTemplate.from_template("""You are a helpful AI assistant. The user asked a comprehensive question that requires information from MULTIPLE DATA SOURCES across different departments.
 
-Here are the RESULTS from the database query:
-{sql_results}
+{sql_section}
 
-Here is CONTEXTUAL INFORMATION from documents:
-{rag_context}
+{rag_section}
 
 Original User Question: {query}
 
-Provide a comprehensive answer that:
-1. Summarizes the key findings from the data query
-2. Provides relevant context from the documents
-3. Connects the data with the contextual information to give a complete answer
-4. Clearly indicates which insights come from data and which come from documentation
+IMPORTANT: This is a CROSS-DEPARTMENTAL query. You have:
+- STRUCTURED DATA (tables/CSV) from one department
+- CONTEXTUAL INFORMATION (documents) from another department
 
-Be clear, concise, and well-organized.""")
+Your task:
+1. Use the DATABASE RESULTS to answer the data-related aspects of the question
+2. Use the DOCUMENT CONTEXT to answer the theoretical/informational aspects
+3. Connect insights from BOTH sources to provide a complete answer
+4. Clearly indicate the department and source type for each piece of information
+
+Do NOT say "the database doesn't contain X" if the answer is in the DOCUMENT CONTEXT section - they are from different sources!
+Do NOT say "documents don't contain Y" if the answer is in the DATABASE RESULTS - they are from different sources!
+
+Be comprehensive, clear, and well-organized.""")
         
         chain = prompt | self.llm
         response = chain.invoke({
-            "sql_results": sql_results_text,
-            "rag_context": rag_context,
+            "sql_section": sql_section,
+            "rag_section": rag_section,
             "query": state["query"]
         })
         
@@ -650,6 +844,183 @@ Be clear, concise, and well-organized.""")
         print(f"✅ Hybrid answer generated\n")
         
         return state
+    
+    def _generate_part_answer(self, part_query: str, part_type: str, relevant_files: List[dict], rag_chunks: List[dict]) -> dict:
+        """
+        Generate answer for a single part of a decomposed query
+        Properly execute SQL and/or RAG independently for each part
+        
+        Returns:
+            {
+                "part_query": "...",
+                "part_response": "...",
+                "part_type": "sql|rag|sql_and_rag",
+                "sql_results": [...] or None,
+                "sources_used": [...]
+            }
+        """
+        print(f"\n    Processing: {part_query[:70]}...")
+        print(f"    Type: {part_type}")
+        
+        sql_results = None
+        rag_context = ""
+        sources_used = []
+        
+        # PART A: Execute SQL if needed
+        if part_type in ["sql", "sql_and_rag"]:
+            if not relevant_files:
+                print(f"    ⚠️  No SQL data files found for this part")
+            else:
+                print(f"    🔍 Executing SQL on: {relevant_files[0]['filename']}")
+                
+                try:
+                    target_file = relevant_files[0]
+                    file_path = target_file["file_path"]
+                    
+                    # Handle both relative and absolute paths
+                    file_path_obj = Path(file_path)
+                    if not file_path_obj.is_absolute():
+                        # Convert relative path to absolute
+                        file_path_obj = file_path_obj.resolve()
+                    
+                    df = pd.read_csv(str(file_path_obj))
+                    
+                    df_info = f"""File: {target_file['filename']}
+Columns: {', '.join(df.columns)}
+Rows: {len(df)}
+Sample:
+{df.head(2).to_string()}"""
+                    
+                    # Generate pandas code for THIS specific part
+                    prompt = ChatPromptTemplate.from_template("""You are a Python/Pandas expert. Generate code to answer this query.
+
+{df_info}
+
+User Query: {question}
+
+Rules:
+1. Use variable 'df' for the DataFrame (already loaded)
+2. Store result in variable 'result'
+3. Return ONLY executable Python/pandas code
+4. No imports, no comments, just code
+5. Handle missing values appropriately
+
+Your code:""")
+                    
+                    chain = prompt | self.llm
+                    response = chain.invoke({"question": part_query, "df_info": df_info})
+                    
+                    code = response.content.strip()
+                    code = code.replace("```python", "").replace("```", "").strip()
+                    code = code.replace("```", "").strip()
+                    
+                    print(f"    📝 Code: {code[:60]}...")
+                    
+                    # Execute safely
+                    namespace = {'df': df, 'pd': pd, 'result': None}
+                    exec(code, namespace)
+                    result = namespace['result']
+                    
+                    # Convert result
+                    if isinstance(result, pd.DataFrame):
+                        sql_results = result.head(5).to_dict(orient='records')
+                        print(f"    ✅ SQL result: {len(result)} rows")
+                    elif isinstance(result, pd.Series):
+                        sql_results = result.to_dict()
+                        print(f"    ✅ SQL result: Series with {len(result)} values")
+                    else:
+                        sql_results = {"value": str(result)}
+                        print(f"    ✅ SQL result: {result}")
+                    
+                    sources_used.append(f"{target_file['filename']} (SQL)")
+                    
+                except Exception as e:
+                    print(f"    ❌ SQL execution failed: {str(e)[:50]}")
+                    sql_results = None
+        
+        # PART B: Get RAG context if needed
+        if part_type in ["rag", "sql_and_rag"]:
+            if not rag_chunks:
+                print(f"    ⚠️  No documents found for this part")
+            else:
+                print(f"    📚 Using {len(rag_chunks)} document chunks")
+                
+                # Combine relevant chunks
+                rag_context = "\n\n".join([
+                    f"[{chunk.get('source', 'Unknown')}]\n{chunk['text']}"
+                    for chunk in rag_chunks[:3]  # Use top 3 chunks
+                ])
+                
+                sources_used.extend([c.get('source', 'Unknown') for c in rag_chunks[:2]])
+        
+        # PART C: Generate answer combining SQL + RAG
+        if part_type == "sql" and sql_results is not None:
+            # SQL only: format results as answer
+            prompt = ChatPromptTemplate.from_template("""Answer this question based on the data:
+
+Question: {question}
+Data: {data}
+
+Provide a clear, concise answer.""")
+            
+            chain = prompt | self.llm
+            response = chain.invoke({
+                "question": part_query,
+                "data": str(sql_results)
+            })
+            part_response = response.content
+        
+        elif part_type == "rag" and rag_context:
+            # RAG only: answer from documents
+            prompt = ChatPromptTemplate.from_template("""Answer based on this information:
+
+{context}
+
+Question: {question}
+
+Provide a comprehensive answer.""")
+            
+            chain = prompt | self.llm
+            response = chain.invoke({
+                "context": rag_context,
+                "question": part_query
+            })
+            part_response = response.content
+        
+        elif part_type == "sql_and_rag":
+            # Hybrid: combine SQL data with RAG context
+            sql_text = f"Data: {str(sql_results)}" if sql_results else "No SQL data available"
+            rag_text = f"Context: {rag_context}" if rag_context else "No documents available"
+            
+            prompt = ChatPromptTemplate.from_template("""Answer this question using both data and context:
+
+{sql_text}
+
+{rag_text}
+
+Question: {question}
+
+Provide a complete answer that uses both sources.""")
+            
+            chain = prompt | self.llm
+            response = chain.invoke({
+                "sql_text": sql_text,
+                "rag_text": rag_text,
+                "question": part_query
+            })
+            part_response = response.content
+        
+        else:
+            # Fallback if nothing matched
+            part_response = f"Could not generate answer for: {part_query[:50]}... (no data or documents found)"
+        
+        return {
+            "part_query": part_query,
+            "part_type": part_type,
+            "part_response": part_response,
+            "sql_results": sql_results,
+            "sources_used": list(set(sources_used))
+        }
     
     # ============= RUN WORKFLOW =============
     def run(self, query: str, department: str, user_id: str, thread_id: str = None) -> ChatState:
@@ -691,7 +1062,8 @@ Be clear, concise, and well-organized.""")
             "conversation_summary": "",
             "conversation_context": {},
             "thread_id": thread_id,
-            "user_id": user_id
+            "user_id": user_id,
+            "decomposed_query": {}
         }
         
         # Run the workflow (no config needed with JSON memory)
